@@ -22,8 +22,11 @@ class DocuBot:
         # Load documents into memory
         self.documents = self.load_documents()  # List of (filename, text)
 
-        # Build a retrieval index (implemented in Phase 1)
-        self.index = self.build_index(self.documents)
+        # Split documents into paragraph-level chunks
+        self.chunks = self.chunk_documents(self.documents)  # List of (filename, chunk_text)
+
+        # Build a retrieval index over chunks
+        self.index = self.build_index(self.chunks)
 
     # -----------------------------------------------------------
     # Document Loading
@@ -45,10 +48,27 @@ class DocuBot:
         return docs
 
     # -----------------------------------------------------------
+    # Chunking
+    # -----------------------------------------------------------
+
+    def chunk_documents(self, documents):
+        """
+        Splits each document into paragraph-level chunks (split on blank lines).
+        Returns a list of (filename, chunk_text) tuples.
+        """
+        chunks = []
+        for filename, text in documents:
+            for para in text.split("\n\n"):
+                para = para.strip()
+                if para:
+                    chunks.append((filename, para))
+        return chunks
+
+    # -----------------------------------------------------------
     # Index Construction (Phase 1)
     # -----------------------------------------------------------
 
-    def build_index(self, documents):
+    def build_index(self, chunks):
         """
         TODO (Phase 1):
         Build a tiny inverted index mapping lowercase words to the documents
@@ -64,7 +84,13 @@ class DocuBot:
         ignore punctuation if needed.
         """
         index = {}
-        # TODO: implement simple indexing
+        for idx, (_, text) in enumerate(chunks):
+            for word in text.lower().split():
+                word = word.strip(".,!?;:\"'()[]{}")
+                if word not in index:
+                    index[word] = []
+                if idx not in index[word]:
+                    index[word].append(idx)
         return index
 
     # -----------------------------------------------------------
@@ -81,8 +107,9 @@ class DocuBot:
         - Count how many appear in the text
         - Return the count as the score
         """
-        # TODO: implement scoring
-        return 0
+        text_lower = text.lower()
+        query_words = query.lower().split()
+        return sum(1 for word in query_words if word in text_lower)
 
     def retrieve(self, query, top_k=3):
         """
@@ -91,9 +118,34 @@ class DocuBot:
 
         Return a list of (filename, text) sorted by score descending.
         """
+        # Find candidate chunk indices via the index
+        candidates = set()
+        for word in query.lower().split():
+            word = word.strip(".,!?;:\"'()[]{}")
+            for idx in self.index.get(word, []):
+                candidates.add(idx)
+
+        # Score each candidate chunk; require at least half the query words to match
+        query_words = query.lower().split()
+        min_score = max(1, len(query_words) // 2)
+        scored = [
+            (self.score_document(query, self.chunks[idx][1]), idx)
+            for idx in candidates
+        ]
+        scored = [(s, idx) for s, idx in scored if s >= min_score]
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        # Keep only the best-scoring chunk per file
+        seen = set()
         results = []
-        # TODO: implement retrieval logic
-        return results[:top_k]
+        for _, idx in scored:
+            filename, text = self.chunks[idx]
+            if filename not in seen:
+                seen.add(filename)
+                results.append((filename, text))
+            if len(results) == top_k:
+                break
+        return results
 
     # -----------------------------------------------------------
     # Answering Modes
@@ -111,8 +163,7 @@ class DocuBot:
 
         formatted = []
         for filename, text in snippets:
-            formatted.append(f"[{filename}]\n{text}\n")
-
+            formatted.append(f"[{filename}]\n{text}")
         return "\n---\n".join(formatted)
 
     def answer_rag(self, query, top_k=3):
